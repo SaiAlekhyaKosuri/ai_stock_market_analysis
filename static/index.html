@@ -16,11 +16,14 @@
 
         <main>
             <div class="controls">
-                <input type="text" id="tickerInput" placeholder="Enter Ticker (e.g., AAPL)" value="AAPL">
+                <input type="text" id="tickerInput" placeholder="Enter Ticker (e.g., AAPL)">
                 <button id="predictBtn">🔮 Predict Next Day Price</button>
             </div>
             <div id="loader" class="loader" style="display: none;"></div>
             <div class="results">
+                <div id="initialMessage" class="chart-placeholder">
+                    <p>Enter a stock ticker and click "Predict" to see the chart and prediction.</p>
+                </div>
                 <div id="chartContainer"></div>
                 <div class="metrics" id="metricsContainer" style="display: none;">
                     <div class="metric">

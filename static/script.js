@@ -1,84 +1,111 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const predictBtn = document.getElementById('predictBtn');
     const tickerInput = document.getElementById('tickerInput');
+    const predictBtn = document.getElementById('predictBtn');
     const loader = document.getElementById('loader');
-    
-    const chartContainer = document.getElementById('chartContainer');
     const metricsContainer = document.getElementById('metricsContainer');
-    const latestPriceEl = document.getElementById('latestPrice');
-    const predictedPriceEl = document.getElementById('predictedPrice');
+    const latestPrice = document.getElementById('latestPrice');
+    const predictedPrice = document.getElementById('predictedPrice');
+    const chartContainer = document.getElementById('chartContainer');
+    const initialMessage = document.getElementById('initialMessage'); // Get the initial message element
 
     const handlePrediction = async () => {
-        const ticker = tickerInput.value.toUpperCase();
+        const ticker = tickerInput.value.trim().toUpperCase();
         if (!ticker) {
-            alert('Please enter a stock ticker.');
+            chartContainer.innerHTML = '<p class="error-message">Please enter a stock ticker.</p>';
+            initialMessage.style.display = 'none';
             return;
         }
 
-        // Show loader and hide old results
         loader.style.display = 'block';
-        chartContainer.innerHTML = '';
         metricsContainer.style.display = 'none';
+        chartContainer.innerHTML = '';
+        initialMessage.style.display = 'none'; // Hide the initial message
+        latestPrice.textContent = '$-';
+        predictedPrice.textContent = '$-';
 
         try {
-            // 1. Fetch historical data for the chart
-            const historyResponse = await fetch(`/history/${ticker}`);
-            if (!historyResponse.ok) throw new Error('Failed to fetch historical data.');
-            
+            // 1. Fetch historical data
+            const historyResponse = await fetch(`/api/history/${ticker}?period=1y`);
+            if (!historyResponse.ok) {
+                const errorData = await historyResponse.json();
+                throw new Error(errorData.detail || `Failed to fetch data. Status: ${historyResponse.status}`);
+            }
             const historyData = await historyResponse.json();
-            const dates = Object.keys(historyData);
-            const closePrices = dates.map(date => historyData[date].Close);
 
-            // 2. Draw the chart using Plotly.js
-            const trace = {
-                x: dates,
-                y: closePrices,
-                type: 'scatter',
-                mode: 'lines',
-                name: `${ticker} Close Price`,
-                line: { color: '#4FD1C5' }
-            };
-            const layout = {
-                title: `${ticker} Closing Price History`,
-                xaxis: { title: 'Date' },
-                yaxis: { title: 'Price (USD)' },
-                paper_bgcolor: '#FFFFFF',
-                plot_bgcolor: '#FFFFFF'
-            };
-            Plotly.newPlot('chartContainer', [trace], layout);
+            if (!historyData || historyData.length < 60) {
+                throw new Error('Insufficient historical data for prediction (need at least 60 days).');
+            }
 
-            // 3. Prepare data and call the prediction API
-            const last60Days = closePrices.slice(-60);
-            const predictResponse = await fetch('/predict', {
+            // 2. Prepare data for prediction and display
+            const recentData = historyData.slice(-60);
+            const closes = recentData.map(item => item.Close);
+            const latestClose = closes[closes.length - 1];
+            latestPrice.textContent = `$${latestClose.toFixed(2)}`;
+
+            // 3. Get prediction from the backend
+            const predictResponse = await fetch('/api/predict', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sequence: last60Days })
+                body: JSON.stringify({ sequence: closes })
             });
-            if (!predictResponse.ok) throw new Error('Failed to get prediction.');
-            
-            const predictionData = await predictResponse.json();
-            const latestPrice = last60Days[last60Days.length - 1];
-            const predictedPrice = predictionData.prediction;
 
-            // 4. Update the metrics
-            latestPriceEl.textContent = `$${latestPrice.toFixed(2)}`;
-            predictedPriceEl.textContent = `$${predictedPrice.toFixed(2)}`;
+            if (!predictResponse.ok) {
+                throw new Error(`Prediction failed. Status: ${predictResponse.status}`);
+            }
+            const prediction = await predictResponse.json();
+            predictedPrice.textContent = `$${prediction.prediction.toFixed(2)}`;
+
+            // 4. Plot the results
+            const dates = recentData.map(item => item.Date);
+            const lastDate = new Date(dates[dates.length - 1]);
+            lastDate.setDate(lastDate.getDate() + 2);
+            const nextDay = lastDate.toISOString().split('T')[0];
+
+            const traceHistorical = {
+                x: dates,
+                y: closes,
+                mode: 'lines',
+                name: 'Historical Price',
+                line: { color: '#007bff' }
+            };
+
+            const tracePredicted = {
+                x: [dates[dates.length - 1], nextDay],
+                y: [latestClose, prediction.prediction],
+                mode: 'lines+markers',
+                name: 'Predicted Price',
+                line: { color: '#ff6347', dash: 'dash' },
+                marker: { color: '#ff6347', size: 8 }
+            };
+
+            const layout = {
+                title: `${ticker} Stock Price Prediction`,
+                xaxis: { title: 'Date' },
+                yaxis: { title: 'Price (USD)' },
+                paper_bgcolor: '#f9f9f9',
+                plot_bgcolor: '#f9f9f9',
+                showlegend: true
+            };
+
+            Plotly.newPlot(chartContainer, [traceHistorical, tracePredicted], layout);
+
             metricsContainer.style.display = 'flex';
 
         } catch (error) {
             console.error('Error:', error);
-            chartContainer.innerHTML = `<p style="color: red; text-align: center;">${error.message}</p>`;
+            chartContainer.innerHTML = `<p class="error-message">⚠️ ${error.message}</p>`;
         } finally {
-            // Hide loader
             loader.style.display = 'none';
         }
     };
 
     predictBtn.addEventListener('click', handlePrediction);
-    // Optional: Allow prediction on pressing Enter in the input box
-    tickerInput.addEventListener('keypress', (event) => {
+    tickerInput.addEventListener('keyup', (event) => {
         if (event.key === 'Enter') {
             handlePrediction();
         }
     });
+
+    // ✅ REMOVED: The line below was causing the prediction to run on page load.
+    // handlePrediction(); 
 });

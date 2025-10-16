@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +10,7 @@ import yfinance as yf
 import pandas as pd
 import os
 import logging
+import requests
 
 # -----------------------------
 # Configure Logging
@@ -38,10 +39,18 @@ app.add_middleware(
 )
 
 # -----------------------------
-# Define Absolute Paths for Model/Scaler
+# Define Project Directory Structure
 # -----------------------------
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(APP_DIR)
+# Assuming your directory structure is:
+# project_root/
+# ├── app/
+# │   └── main.py
+# ├── models/
+# │   └── lstm_model.h5, scaler.gz
+# └── static/
+#     └── index.html, script.js, style.css
+# This setup makes path resolution robust.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(BASE_DIR, 'models', 'lstm_model.h5')
 SCALER_PATH = os.path.join(BASE_DIR, 'models', 'scaler.gz')
 STATIC_DIR = os.path.join(BASE_DIR, 'static')
@@ -50,11 +59,18 @@ STATIC_DIR = os.path.join(BASE_DIR, 'static')
 # Load ML Model and Scaler on Startup
 # -----------------------------
 try:
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(f"Model not found at {MODEL_PATH}")
     model = load_model(MODEL_PATH)
+    logger.info(f"Loaded model from {MODEL_PATH}")
+    
+    if not os.path.exists(SCALER_PATH):
+        raise FileNotFoundError(f"Scaler not found at {SCALER_PATH}")
     scaler = joblib.load(SCALER_PATH)
+    logger.info(f"Loaded scaler from {SCALER_PATH}")
 except Exception as e:
-    raise RuntimeError(f"Error loading model or scaler: {e}\n"
-                     f"Checked paths:\nModel: {MODEL_PATH}\nScaler: {SCALER_PATH}")
+    logger.error(f"Error loading model or scaler: {e}")
+    raise RuntimeError(f"Could not load ML model or scaler. Ensure they exist at the correct paths.") from e
 
 # -----------------------------
 # Pydantic Model for Prediction Input
@@ -68,15 +84,17 @@ class StockInput(BaseModel):
 
 @app.get("/api/health", tags=["Health Check"])
 def health_check():
-    """Simple health check endpoint to confirm the API is running."""
-    return {"status": "ok"}
+    """Checks the service and its connectivity to Yahoo Finance."""
+    try:
+        response = requests.get("https://finance.yahoo.com", timeout=5)
+        network_status = "healthy" if response.status_code == 200 else "unhealthy"
+    except requests.RequestException:
+        network_status = "unhealthy"
+    return {"status": "ok", "network_to_yahoo": network_status}
 
 @app.post("/api/predict", tags=["Prediction"])
 def predict(stock_input: StockInput):
-    """
-    Predict the next day's stock price based on a sequence of the
-    last 60 days' closing prices.
-    """
+    """Predicts the next day's stock price based on a sequence of 60 closing prices."""
     logger.info("Prediction endpoint called.")
     if len(stock_input.sequence) != 60:
         raise HTTPException(
@@ -84,60 +102,64 @@ def predict(stock_input: StockInput):
             detail="Input sequence must contain exactly 60 values."
         )
     try:
-        # Reshape and scale the input data
         input_data = np.array(stock_input.sequence).reshape(-1, 1)
         scaled_input = scaler.transform(input_data)
-        
-        # Reshape for LSTM model (samples, timesteps, features)
         reshaped_input = np.reshape(scaled_input, (1, 60, 1))
         
-        # Make prediction
         prediction_scaled = model.predict(reshaped_input)
-        
-        # Inverse transform the prediction to get the actual price
         prediction = scaler.inverse_transform(prediction_scaled)
         
         logger.info("Prediction successful.")
         return {"prediction": float(prediction[0][0])}
     except Exception as e:
-        logger.error(f"An error occurred during prediction: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred during prediction: {str(e)}")
+        logger.error(f"An error occurred during prediction: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during prediction.")
 
 @app.get("/api/history/{ticker}", tags=["Stock Data"])
-def get_history(ticker: str, start_date: str = '2015-01-01', period: str = None):
-    """Fetch historical stock data for a given ticker from Yahoo Finance."""
-    logger.info(f"Fetching history for ticker: {ticker}")
+def get_history(ticker: str, period: str = "1y"):
+    """Fetches historical stock data for a given ticker."""
+    logger.info(f"Fetching historical data for ticker: {ticker}")
     try:
-        if period:
-            data = yf.download(ticker, period=period)
-        else:
-            data = yf.download(ticker, start=start_date)
+        stock = yf.Ticker(ticker)
+        data = stock.history(period=period)
         
         if data.empty:
             logger.warning(f"No historical data found for ticker '{ticker}'")
             raise HTTPException(
                 status_code=404,
-                detail=f"No historical data found for ticker '{ticker}'"
+                detail=f"No historical data found for ticker '{ticker}'. It might be an invalid symbol."
             )
-        
-        # Reset index to make it a column for JSON serialization
+
+        # ✅ FIX: Simplified and robust data serialization
+        # Reset index to make 'Date' a column and format it correctly.
         data = data.reset_index()
-        logger.info(f"Successfully fetched data for {ticker}.")
-        return data.to_dict(orient='records')
+        data['Date'] = data['Date'].dt.strftime('%Y-%m-%d')
         
+        # Convert DataFrame to a list of dictionaries, which is JSON-friendly.
+        # This handles all data types (floats, ints, etc.) automatically.
+        response_data = data.to_dict(orient='records')
+        
+        logger.info(f"Successfully processed {len(response_data)} data points for {ticker}")
+        return response_data
+
     except Exception as e:
-        logger.error(f"An error occurred while fetching data for {ticker}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred while fetching data: {str(e)}")
+        logger.error(f"An error occurred while fetching data for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while fetching data from the external provider.")
 
 # -----------------------------
 # Serve Frontend
 # -----------------------------
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 @app.get("/", include_in_schema=False)
 def read_root():
-    """Serve the main index.html file for the frontend."""
+    """Serves the main index.html file."""
     index_path = os.path.join(STATIC_DIR, 'index.html')
     if not os.path.exists(index_path):
         raise HTTPException(status_code=404, detail="index.html not found")
     return FileResponse(index_path)
+
+if __name__ == "__main__":
+    import uvicorn
+    # For production, consider using a different server like Gunicorn with Uvicorn workers.
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
