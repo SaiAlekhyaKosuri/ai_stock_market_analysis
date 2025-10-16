@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinFor Predictor</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📈 FinFor: Stock Price Predictor</h1>
+            <p>Predicting the future, one stock at a time. Powered by LSTMs.</p>
+        </header>
+
+        <main>
+            <div class="controls">
+                <input type="text" id="tickerInput" placeholder="Enter Ticker (e.g., AAPL)" value="AAPL">
+                <button id="predictBtn">🔮 Predict Next Day Price</button>
+            </div>
+            <div id="loader" class="loader" style="display: none;"></div>
+            <div class="results">
+                <div id="chartContainer"></div>
+                <div class="metrics" id="metricsContainer" style="display: none;">
+                    <div class="metric">
+                        <span class="label">Latest Closing Price</span>
+                        <span class="value" id="latestPrice">--</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Predicted Next Day Price</span>
+                        <span class="value" id="predictedPrice">--</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
